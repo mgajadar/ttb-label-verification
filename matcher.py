@@ -3,75 +3,69 @@ from thefuzz import fuzz
 
 class LabelMatcher:
     def __init__(self, expected: dict, extracted: dict):
-        """
-        Initializes the matching engine.
-        :param expected: Dictionary of inputs from the UI (COLA Application Data)
-        :param extracted: Dictionary or Pydantic object from the Vision Model
-        """
-        self.expected = {k.lower(): str(v).strip() for k, v in expected.items()}
-        self.extracted = {k.lower(): str(v).strip() for k, v in extracted.items()}
+        self.expected = expected
+        self.extracted = extracted
 
-    def verify_brand_name(self, threshold: int = 85) -> tuple[bool, str]:
-        """Applies fuzzy matching to handle natural text/casing nuances."""
-        exp = self.expected.get("brand_name", "")
-        ext = self.extracted.get("brand_name", "")
+    def verify_brand_name(self):
+        exp = str(self.expected.get("brand_name", "")).upper()
+        ext = str(self.extracted.get("brand_name", "")).upper()
         
-        if not exp or not ext:
-            return False, "Missing data"
-            
-        ratio = fuzz.ratio(exp.lower(), ext.lower())
-        if ratio >= threshold:
-            return True, f"Match ({ratio}% match similarity)"
-        return False, f"Mismatch: Expected '{exp}', Found '{ext}'"
+        score = fuzz.ratio(exp, ext)
+        if score >= 85:
+            return {"passed": True, "message": f"Match ({score}% similarity)"}
+        return {"passed": False, "message": f"Failed: Expected '{exp}', found '{ext}'"}
 
-    def verify_abv(self) -> tuple[bool, str]:
-        """Normalizes and extracts numerical values to evaluate alcohol content consistently."""
-        exp = self.expected.get("abv", "")
-        ext = self.extracted.get("abv", "")
+    def verify_class_type(self):
+        exp = str(self.expected.get("class_type", "")).upper()
+        ext = str(self.extracted.get("class_type", "")).upper()
         
-        #regex for numbers and %
-        exp_digits = "".join(re.findall(r'\d+', exp))
-        ext_digits = "".join(re.findall(r'\d+', ext))
-        
-        if exp_digits and ext_digits and exp_digits == ext_digits:
-            return True, f"Match: Verified {ext}"
-        return False, f"Mismatch: Expected '{exp}', Found '{ext}'"
+        score = fuzz.token_sort_ratio(exp, ext)
+        if score >= 80:
+            return {"passed": True, "message": f"Match ({score}% similarity)"}
+        return {"passed": False, "message": f"Failed: Expected '{exp}', found '{ext}'"}
 
-    def verify_net_contents(self, threshold: int = 90) -> tuple[bool, str]:
-        """Fuzzy matches fluid content descriptions (e.g., '750 mL' vs '750ml')."""
-        exp = self.expected.get("net_contents", "")
-        ext = self.extracted.get("net_contents", "")
-        
-        ratio = fuzz.token_set_ratio(exp.lower(), ext.lower())
-        if ratio >= threshold:
-            return True, f"Match: Verified {ext}"
-        return False, f"Mismatch: Expected '{exp}', Found '{ext}'"
+    def verify_abv(self):
+        exp = str(self.expected.get("abv", ""))
+        ext = str(self.extracted.get("abv", ""))
 
-    def verify_government_warning(self) -> tuple[bool, str]:
-        """Enforces a strict, case-sensitive character verification layout."""
-        ext = self.extracted.get("government_warning", "")
-        
-        #'GOVERNMENT WARNING:' header must be in all-caps
-        if "GOVERNMENT WARNING:" not in ext:
-            return False, "REJECTED: Mandatory 'GOVERNMENT WARNING:' header is missing or not in ALL CAPS."
-            
-        return True, "Match: Exact header and text verified."
+        exp_match = re.search(r"\d+(\.\d+)?", exp)
+        ext_match = re.search(r"\d+(\.\d+)?", ext)
 
-    def run_compliance_check(self) -> dict:
-        """Executes all rules and determines an overarching approval state."""
-        brand_ok, brand_msg = self.verify_brand_name()
-        abv_ok, abv_msg = self.verify_abv()
-        net_ok, net_msg = self.verify_net_contents()
-        warning_ok, warning_msg = self.verify_government_warning()
+        if exp_match and ext_match:
+            exp_val = float(exp_match.group())
+            ext_val = float(ext_match.group())
+            if exp_val == ext_val:
+                return {"passed": True, "message": f"Verified {exp_val}%"}
+        return {"passed": False, "message": f"Failed: Expected '{exp}', found '{ext}'"}
+
+    def verify_net_contents(self):
+        exp = str(self.expected.get("net_contents", "")).upper()
+        ext = str(self.extracted.get("net_contents", "")).upper()
         
-        is_approved = all([brand_ok, abv_ok, net_ok, warning_ok])
+        score = fuzz.partial_ratio(exp, ext)
+        if score >= 80:
+             return {"passed": True, "message": f"Match ({score}% similarity)"}
+        return {"passed": False, "message": f"Failed: Expected '{exp}', found '{ext}'"}
+
+    def verify_government_warning(self):
+        ext = str(self.extracted.get("government_warning", ""))
         
+        if ext.startswith("GOVERNMENT WARNING:"):
+            return {"passed": True, "message": "Exact header and text verified."}
+        return {"passed": False, "message": "Failed: Missing mandatory 'GOVERNMENT WARNING:' in all-caps."}
+
+    def run_compliance_check(self):
+        details = {
+            "brand_name": self.verify_brand_name(),
+            "class_type": self.verify_class_type(), 
+            "abv": self.verify_abv(),
+            "net_contents": self.verify_net_contents(),
+            "government_warning": self.verify_government_warning()
+        }
+
+        is_approved = all(field["passed"] for field in details.values())
+
         return {
             "is_approved": is_approved,
-            "details": {
-                "brand_name": {"passed": brand_ok, "message": brand_msg},
-                "abv": {"passed": abv_ok, "message": abv_msg},
-                "net_contents": {"passed": net_ok, "message": net_msg},
-                "government_warning": {"passed": warning_ok, "message": warning_msg}
-            }
+            "details": details
         }
